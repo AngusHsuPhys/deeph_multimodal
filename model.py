@@ -613,10 +613,16 @@ class HGNN(nn.Module):
                                      normalization=normalization, atom_update_net=atom_update_net,
                                      gauss_stop=gauss_stop, output_layer=True)
 
+        # Define the DOS prediction network with an initial placeholder input size
+        self.fermi_fc1 = nn.Linear(0, 512)  # Placeholder size, will be adjusted in forward
+        self.fermi_fc2 = nn.Linear(512, 256)
+        self.fermi_fc3 = nn.Linear(256, 128)
+        self.fermi_fc4 = nn.Linear(128, 1)
 
     def forward(self, atom_attr, edge_idx, edge_attr, batch,
                 sub_atom_idx=None, sub_edge_idx=None, sub_edge_ang=None, sub_index=None,
                 huge_structure=False, output_final_layer_neuron=''):
+        device = atom_attr.device  # Get the device of the input tensor
         batch_edge = batch[edge_idx[0]]
         atom_fea0 = self.embed(atom_attr)
         distance = edge_attr[:, 0]
@@ -673,4 +679,20 @@ class HGNN(nn.Module):
             out = self.multiple_linear2(F.silu(out), batch_edge)
             out = out.T
 
-        return out
+        # Ensure all tensors are on the same device
+        edge_fea_aggregated = torch.zeros((atom_fea.shape[0], edge_fea.shape[1]),device=device)
+        edge_fea_aggregated.index_add_(0, edge_idx[0].to(device), edge_fea.to(device))
+        # Combine atom and edge features
+        combined_fea = torch.cat([atom_fea, edge_fea_aggregated], dim=1)
+
+        # Dynamically adjust the first fully connected layer
+        if self.fermi_fc1.in_features != combined_fea.shape[1]:
+            self.fermi_fc1 = nn.Linear(combined_fea.shape[1], 512).to(device)
+
+        fermi_pred = torch.relu(self.fermi_fc1(combined_fea))
+        fermi_pred = torch.relu(self.fermi_fc2(fermi_pred))
+        fermi_pred = torch.relu(self.fermi_fc3(fermi_pred))
+        fermi_pred = self.fermi_fc4(fermi_pred)
+        
+        fermi_pred = fermi_pred.sum(dim=0) 
+        return out,  fermi_pred

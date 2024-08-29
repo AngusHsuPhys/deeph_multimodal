@@ -212,9 +212,12 @@ class DeepHKernel:
                 assert self.lambda_Eij == 0.0
         else:
             if self.criterion_name == 'MaskMSELoss':
-                self.criterion = MaskMSELoss()
+                # self.criterion = MaskMSELoss()
+                self.criterion = MSELoss()
+
             else:
-                raise ValueError(f'Unknown criterion: {self.criterion_name}')
+                self.criterion = MSELoss()
+                # raise ValueError(f'Unknown criterion: {self.criterion_name}')
 
         learning_rate = self.config.getfloat('hyperparameter', 'learning_rate')
         momentum = self.config.getfloat('hyperparameter', 'momentum')
@@ -310,6 +313,24 @@ class DeepHKernel:
         self.num_species = len(dataset.info["index_to_Z"])
         if self.target != 'E_ij' and self.target != 'E_i':
             dataset = self.make_mask(dataset)
+        
+        '''
+        This section is designated to load the Fermi level into the dataset, and perform the multimodal training.
+        '''
+        
+        #====================================================================================#
+        import os
+        import json
+        for i, data in enumerate(dataset):
+            stru_id = int(data.stru_id)
+            dir_path = '/work/bansil/angus.h/tBB/deeph/work_dir/dataset/processed/{}'.format(stru_id)
+            info_path = os.path.join(dir_path, 'info.json')
+            if os.path.isfile(info_path):
+                with open(info_path, 'r') as f:
+                    jsonfile = json.load(f)
+                    fermi_level = jsonfile.get('fermi_level')
+                    dataset[i].y = torch.tensor(fermi_level, dtype=torch.get_default_dtype()) # note that my fermi_level is in float64, but dtype of torch is float32, this will cause the difference in number after 5 or 6 digits
+        #====================================================================================#
 
         dataset_size = len(dataset)
         train_size = int(self.config.getfloat('train', 'train_ratio') * dataset_size)
@@ -408,6 +429,7 @@ class DeepHKernel:
                     out_fea_len = self.num_orbital
             mask = torch.zeros(data.edge_attr.shape[0], out_fea_len, dtype=torch.int8)
             label = torch.zeros(data.edge_attr.shape[0], out_fea_len, dtype=torch.get_default_dtype())
+            y = torch.zeros(data.edge_attr.shape[0], 1, dtype=torch.get_default_dtype())
 
             atomic_number_edge_i = self.index_to_Z[data.x[data.edge_index[0]]]
             atomic_number_edge_j = self.index_to_Z[data.x[data.edge_index[1]]]
@@ -476,6 +498,7 @@ class DeepHKernel:
             del data.term_mask
             if if_only_rc == False:
                 data.label = label
+                data.y = y
                 if self.target == 'hamiltonian' or self.target == 'density_matrix':
                     del data.term_real
                 elif self.target == 'O_ij':
@@ -655,7 +678,7 @@ class DeepHKernel:
             if self.if_lcmp:
                 batch, subgraph = batch_tuple
                 sub_atom_idx, sub_edge_idx, sub_edge_ang, sub_index = subgraph
-                output = self.model(
+                out_hamil, out_fermi = self.model(
                     batch.x.to(self.device),
                     batch.edge_index.to(self.device),
                     batch.edge_attr.to(self.device),
@@ -667,7 +690,7 @@ class DeepHKernel:
                 )
             else:
                 batch = batch_tuple
-                output = self.model(
+                out_hamil, out_fermi = self.model(
                     batch.x.to(self.device),
                     batch.edge_index.to(self.device),
                     batch.edge_attr.to(self.device),
@@ -696,9 +719,12 @@ class DeepHKernel:
                 label = batch.E_i.to(self.device)
                 output = output.reshape(label.shape)
             else:
-                label = batch.label.to(self.device)
-                output = output.reshape(label.shape)
-
+                # label = batch.label.to(self.device)
+                # output = output.reshape(label.shape)
+                labels_hamil = batch.label.to(self.device)
+                labels_fermi = batch.y.to(self.device)
+                # out_hamil = out_hamil.reshape(labels_hamil.shape)
+                # out_fermi = out_fermi.reshape(labels_fermi.shape)
             if self.target == 'E_i':
                 loss = self.criterion(output, label)
             elif self.target == 'E_ij':
@@ -714,8 +740,12 @@ class DeepHKernel:
                 loss = loss_Eij * self.lambda_Eij + loss_Ei * self.lambda_Ei + loss_Etot * self.lambda_Etot
             else:
                 if self.criterion_name == 'MaskMSELoss':
-                    mask = batch.mask.to(self.device)
-                    loss = self.criterion(output, label, mask)
+                    # mask = batch.mask.to(self.device)
+                    # loss_hamil = self.criterion(out_hamil, labels_hamil, mask)
+                    loss_hamil =  self.criterion(out_hamil, labels_hamil)
+                    loss_fermi =  self.criterion(out_fermi, labels_fermi)
+                    loss = loss_hamil + loss_fermi
+                    
                 else:
                     raise ValueError(f'Unknown criterion: {self.criterion_name}')
             if task == 'TRAIN':
@@ -723,7 +753,7 @@ class DeepHKernel:
                     def closure():
                         self.optimizer.zero_grad()
                         if self.if_lcmp:
-                            output = self.model(
+                            out_hamil, out_fermi = self.model(
                                 batch.x.to(self.device),
                                 batch.edge_index.to(self.device),
                                 batch.edge_attr.to(self.device),
@@ -734,13 +764,19 @@ class DeepHKernel:
                                 sub_index.to(self.device)
                             )
                         else:
-                            output = self.model(
+                            out_hamil, out_fermi = self.model(
                                 batch.x.to(self.device),
                                 batch.edge_index.to(self.device),
                                 batch.edge_attr.to(self.device),
                                 batch.batch.to(self.device)
                             )
-                        loss = self.criterion(output, label.to(self.device), mask)
+                        labels_hamil = batch.label.to(self.device)
+                        labels_fermi = batch.y.to(self.device)
+                        
+                        loss_hamil = self.criterion(out_hamil, labels_hamil.to(self.device))
+                        loss_fermi = self.criterion(out_fermi, labels_fermi.to(self.device))
+
+                        total_loss = loss_hamil + loss_fermi
                         loss.backward()
                         return loss
 
@@ -756,19 +792,20 @@ class DeepHKernel:
                 losses.update(loss.item(), batch.num_nodes)
             else:
                 if self.criterion_name == 'MaskMSELoss':
-                    losses.update(loss.item(), mask.sum())
-                if task != 'TRAIN' and self.out_fea_len != 1:
-                    if self.criterion_name == 'MaskMSELoss':
-                        se_each_out = torch.pow(output - label.to(self.device), 2)
-                        for index_out, losses_each_out_for in enumerate(losses_each_out):
-                            count = mask[:, index_out].sum().item()
-                            if count == 0:
-                                losses_each_out_for.update(-1, 1)
-                            else:
-                                losses_each_out_for.update(
-                                    torch.masked_select(se_each_out[:, index_out], mask[:, index_out]).mean().item(),
-                                    count
-                                )
+                    # losses.update(loss.item(), mask.sum())
+                    losses.update(loss.item())
+                # if task != 'TRAIN' and self.out_fea_len != 1:
+                #     if self.criterion_name == 'MaskMSELoss':
+                #         se_each_out = torch.pow(output - label.to(self.device), 2)
+                #         for index_out, losses_each_out_for in enumerate(losses_each_out):
+                #             count = mask[:, index_out].sum().item()
+                #             if count == 0:
+                #                 losses_each_out_for.update(-1, 1)
+                #             else:
+                #                 losses_each_out_for.update(
+                #                     torch.masked_select(se_each_out[:, index_out], mask[:, index_out]).mean().item(),
+                #                     count
+                #                 )
             if task == 'TEST':
                 if self.target == "E_ij":
                     test_targets += torch.squeeze(label_Ei.detach().cpu()).tolist()
