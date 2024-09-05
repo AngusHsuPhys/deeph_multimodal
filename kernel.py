@@ -212,8 +212,8 @@ class DeepHKernel:
                 assert self.lambda_Eij == 0.0
         else:
             if self.criterion_name == 'MaskMSELoss':
-                # self.criterion = MaskMSELoss()
-                self.criterion = MSELoss()
+                self.criterion = MaskMSELoss()
+                self.criterion_2 = MSELoss()
 
             else:
                 self.criterion = MSELoss()
@@ -723,8 +723,8 @@ class DeepHKernel:
                 # output = output.reshape(label.shape)
                 labels_hamil = batch.label.to(self.device)
                 labels_fermi = batch.y.to(self.device)
-                # out_hamil = out_hamil.reshape(labels_hamil.shape)
-                # out_fermi = out_fermi.reshape(labels_fermi.shape)
+                out_hamil = out_hamil.reshape(labels_hamil.shape)
+                out_fermi = out_fermi.reshape(labels_fermi.shape)
             if self.target == 'E_i':
                 loss = self.criterion(output, label)
             elif self.target == 'E_ij':
@@ -740,10 +740,10 @@ class DeepHKernel:
                 loss = loss_Eij * self.lambda_Eij + loss_Ei * self.lambda_Ei + loss_Etot * self.lambda_Etot
             else:
                 if self.criterion_name == 'MaskMSELoss':
-                    # mask = batch.mask.to(self.device)
-                    # loss_hamil = self.criterion(out_hamil, labels_hamil, mask)
-                    loss_hamil =  self.criterion(out_hamil, labels_hamil)
-                    loss_fermi =  self.criterion(out_fermi, labels_fermi)
+                    mask = batch.mask.to(self.device)
+                    loss_hamil = self.criterion(out_hamil, labels_hamil, mask)
+                    # loss_hamil =  self.criterion(out_hamil, labels_hamil)
+                    loss_fermi =  self.criterion_2(out_fermi, labels_fermi)
                     loss = loss_hamil + loss_fermi
                     
                 else:
@@ -776,7 +776,7 @@ class DeepHKernel:
                         loss_hamil = self.criterion(out_hamil, labels_hamil.to(self.device))
                         loss_fermi = self.criterion(out_fermi, labels_fermi.to(self.device))
 
-                        total_loss = loss_hamil + loss_fermi
+                        loss = loss_hamil + loss_fermi
                         loss.backward()
                         return loss
 
@@ -792,20 +792,20 @@ class DeepHKernel:
                 losses.update(loss.item(), batch.num_nodes)
             else:
                 if self.criterion_name == 'MaskMSELoss':
-                    # losses.update(loss.item(), mask.sum())
-                    losses.update(loss.item())
-                # if task != 'TRAIN' and self.out_fea_len != 1:
-                #     if self.criterion_name == 'MaskMSELoss':
-                #         se_each_out = torch.pow(output - label.to(self.device), 2)
-                #         for index_out, losses_each_out_for in enumerate(losses_each_out):
-                #             count = mask[:, index_out].sum().item()
-                #             if count == 0:
-                #                 losses_each_out_for.update(-1, 1)
-                #             else:
-                #                 losses_each_out_for.update(
-                #                     torch.masked_select(se_each_out[:, index_out], mask[:, index_out]).mean().item(),
-                #                     count
-                #                 )
+                    losses.update(loss.item(), mask.sum())
+                    # losses.update(loss.item())
+                if task != 'TRAIN' and self.out_fea_len != 1:
+                    if self.criterion_name == 'MaskMSELoss':
+                        se_each_out = torch.pow(out_hamil - labels_hamil.to(self.device), 2) 
+                        for index_out, losses_each_out_for in enumerate(losses_each_out):
+                            count = mask[:, index_out].sum().item()
+                            if count == 0:
+                                losses_each_out_for.update(-1, 1)
+                            else:
+                                losses_each_out_for.update(
+                                    torch.masked_select(se_each_out[:, index_out], mask[:, index_out]).mean().item(),
+                                    count
+                                )
             if task == 'TEST':
                 if self.target == "E_ij":
                     test_targets += torch.squeeze(label_Ei.detach().cpu()).tolist()
