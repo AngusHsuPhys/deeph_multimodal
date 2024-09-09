@@ -522,6 +522,22 @@ class DeepHKernel:
         lr_step_num = len(revert_decay_epoch)
 
         try:
+            import wandb
+            id = wandb.util.generate_id()
+            wandb.init(
+                id = id,
+                name="quick test run",
+                project="tBB-Fermi",
+
+                # track hyperparameters and run metadata
+                config={
+                "learning_rate": self.optimizer.param_groups[0]['lr'],
+                "architecture": "CGCONV",
+                "dataset": "tBB",
+                "epochs": self.config.getint('train', 'epochs'),
+                }
+            )
+
             for epoch in range(self.config.getint('train', 'epochs')):
                 if self.config.getboolean('train', 'switch_sgd') and epoch == self.config.getint('train', 'switch_sgd_epoch'):
                     model_parameters = filter(lambda p: p.requires_grad, self.model.parameters())
@@ -536,7 +552,7 @@ class DeepHKernel:
                 train_losses = self.kernel_fn(train_loader, 'TRAIN')
                 if self.if_tensorboard:
                     self.tb_writer.add_scalars('loss', {'Train loss': train_losses.avg}, global_step=epoch)
-
+                wandb.log({"train_losses": train_losses.avg},step=epoch)
                 # val
                 with torch.no_grad():
                     val_losses = self.kernel_fn(val_loader, 'VAL')
@@ -603,6 +619,7 @@ class DeepHKernel:
                     self.scheduler.step(val_losses.avg)
                 elif self.config.get('hyperparameter', 'lr_scheduler') == 'CyclicLR':
                     self.scheduler.step()
+                wandb.log({"val_losses": val_losses.avg},step=epoch)
 
                 print(f'Epoch #{epoch:01d} \t| '
                       f'Learning rate: {learning_rate:0.2e} \t| '
@@ -673,7 +690,8 @@ class DeepHKernel:
                 test_edge_infos = []
 
         if task != 'TRAIN' and (self.out_fea_len != 1):
-            losses_each_out = [LossRecord() for _ in range(self.out_fea_len)]
+            losses_each_out = [LossRecord() for _ in range(self.out_fea_len)]    
+        
         for step, batch_tuple in enumerate(loader):
             if self.if_lcmp:
                 batch, subgraph = batch_tuple

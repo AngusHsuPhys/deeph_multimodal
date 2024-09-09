@@ -694,5 +694,6 @@ class HGNN(nn.Module):
         fermi_pred = torch.relu(self.fermi_fc3(fermi_pred))
         fermi_pred = self.fermi_fc4(fermi_pred)
         
-        fermi_pred = fermi_pred.sum(dim=0) 
+        # fermi_pred = fermi_pred.sum(dim=0) 
+        fermi_pred = fermi_pred.mean(dim=0)
         return out,  fermi_pred
