@@ -323,7 +323,8 @@ class DeepHKernel:
         import json
         for i, data in enumerate(dataset):
             stru_id = int(data.stru_id)
-            dir_path = '/work/bansil/angus.h/tBB/deeph/work_dir/dataset/processed/{}'.format(stru_id)
+            # dir_path = '/work/bansil/angus.h/tBB/deeph/work_dir/dataset/processed/{}'.format(stru_id)
+            dir_path = os.path.join(self.config.get('basic', 'raw_dir'), '{}'.format(stru_id))
             info_path = os.path.join(dir_path, 'info.json')
             if os.path.isfile(info_path):
                 with open(info_path, 'r') as f:
